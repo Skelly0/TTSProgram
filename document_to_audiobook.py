@@ -164,16 +164,31 @@ class OpenRouterLLMProcessor:
             site_url: Optional site URL for OpenRouter rankings
             site_title: Optional site title for OpenRouter rankings
         """
+        logger.info(f"🔧 Initializing OpenRouter LLM processor...")
+        
         self.api_key = api_key
         self.model = model
         self.site_url = site_url
         self.site_title = site_title
         
+        # Log configuration details
+        logger.info(f"🤖 Selected model: {model}")
+        logger.info(f"🔑 API key configured: {'Yes' if api_key else 'No'}")
+        if site_url:
+            logger.info(f"🌐 Site URL: {site_url}")
+        if site_title:
+            logger.info(f"🏷️  Site title: {site_title}")
+        
         # Initialize OpenAI client with OpenRouter endpoint
+        logger.debug(f"📡 Setting up OpenRouter API client...")
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=api_key,
         )
+        logger.debug(f"✅ OpenRouter client initialized")
+        
+        # Test API connectivity
+        self._test_api_connection()
         
         # System prompt for SSML conversion
         self.system_prompt = """You are AudioBookFormatter-v1.
@@ -192,6 +207,35 @@ Rules:
 • Convert headings to narrative sign-posts with emphasis tags.
 • Handle fantasy names and terms with care, adding pronunciation guides where needed.
 • Maintain immersion and narrative flow throughout."""
+        
+        logger.info(f"📋 System prompt configured ({len(self.system_prompt)} chars)")
+    
+    def _test_api_connection(self):
+        """Test API connectivity with a minimal request."""
+        try:
+            logger.info(f"🔍 Testing OpenRouter API connection...")
+            test_start = time.time()
+            
+            # Make a minimal test request
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "user", "content": "Hello"}
+                ],
+                max_tokens=5,
+                temperature=0.1
+            )
+            
+            test_duration = time.time() - test_start
+            logger.info(f"✅ API connection test successful in {test_duration:.2f}s")
+            
+            # Log test response details
+            if hasattr(response, 'usage') and response.usage:
+                logger.debug(f"📊 Test usage - Tokens: {response.usage.total_tokens}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️  API connection test failed: {e}")
+            logger.warning(f"🔄 Will attempt to proceed anyway - errors will be handled per request")
 
     def preprocess_text_chunk(self, text_chunk: str) -> str:
         """
@@ -203,8 +247,11 @@ Rules:
         Returns:
             SSML-formatted text optimized for Kokoro-82M
         """
+        chunk_start_time = time.time()
         try:
-            logger.debug(f"🤖 Processing chunk with LLM ({len(text_chunk)} chars)")
+            logger.info(f"🤖 Starting LLM preprocessing for chunk ({len(text_chunk)} chars, ~{len(text_chunk.split())} words)")
+            logger.debug(f"📝 Chunk preview: {text_chunk[:100]}{'...' if len(text_chunk) > 100 else ''}")
+            logger.info(f"🔧 Using model: {self.model}")
             
             # Prepare headers for OpenRouter
             headers = {
@@ -212,8 +259,13 @@ Rules:
             }
             if self.site_url:
                 headers["HTTP-Referer"] = self.site_url
+                logger.debug(f"🌐 Site URL: {self.site_url}")
             if self.site_title:
                 headers["X-Title"] = self.site_title
+                logger.debug(f"🏷️  Site title: {self.site_title}")
+            
+            logger.info(f"📡 Sending request to OpenRouter API...")
+            api_start_time = time.time()
             
             # Make API call to OpenRouter
             completion = self.client.chat.completions.create(
@@ -227,16 +279,43 @@ Rules:
                 max_tokens=4000   # Generous limit for SSML output
             )
             
+            api_duration = time.time() - api_start_time
+            logger.info(f"📡 API response received in {api_duration:.2f}s")
+            
+            # Log API usage information if available
+            if hasattr(completion, 'usage') and completion.usage:
+                usage = completion.usage
+                logger.info(f"📊 Token usage - Input: {usage.prompt_tokens}, Output: {usage.completion_tokens}, Total: {usage.total_tokens}")
+                if hasattr(usage, 'total_cost'):
+                    logger.info(f"💰 Estimated cost: ${usage.total_cost:.6f}")
+            
             processed_text = completion.choices[0].message.content.strip()
+            logger.info(f"📝 LLM generated {len(processed_text)} characters of SSML")
+            
+            # Log the model's response metadata
+            if hasattr(completion.choices[0], 'finish_reason'):
+                finish_reason = completion.choices[0].finish_reason
+                logger.debug(f"🏁 Completion finish reason: {finish_reason}")
+                if finish_reason == 'length':
+                    logger.warning(f"⚠️  Response may be truncated due to max_tokens limit")
             
             # Validate and clean SSML
+            logger.debug(f"🔍 Validating and cleaning SSML output...")
             processed_text = self._validate_and_clean_ssml(processed_text)
             
-            logger.debug(f"✅ LLM processing complete ({len(processed_text)} chars)")
+            total_duration = time.time() - chunk_start_time
+            logger.info(f"✅ LLM preprocessing complete in {total_duration:.2f}s (API: {api_duration:.2f}s, Processing: {total_duration - api_duration:.2f}s)")
+            logger.debug(f"📏 Output length: {len(processed_text)} chars, compression ratio: {len(processed_text)/len(text_chunk):.2f}x")
+            
             return processed_text
             
         except Exception as e:
-            logger.warning(f"⚠️  LLM preprocessing failed: {e}")
+            total_duration = time.time() - chunk_start_time
+            logger.error(f"❌ LLM preprocessing failed after {total_duration:.2f}s: {e}")
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            if hasattr(e, 'response') and e.response:
+                logger.error(f"📡 HTTP status: {e.response.status_code}")
+                logger.error(f"📄 Response body: {e.response.text[:200]}...")
             logger.info(f"🔄 Falling back to basic preprocessing")
             # Fallback to basic preprocessing if LLM fails
             return self._basic_ssml_fallback(text_chunk)
@@ -251,20 +330,37 @@ Rules:
         Returns:
             Cleaned and validated SSML
         """
+        logger.debug(f"🔍 Validating SSML output ({len(ssml_text)} chars)")
+        original_length = len(ssml_text)
+        
         # Remove any text outside <speak> tags
         speak_match = re.search(r'<speak[^>]*>(.*?)</speak>', ssml_text, re.DOTALL)
         if speak_match:
             ssml_content = speak_match.group(1)
+            logger.debug(f"✅ Found valid <speak> tags, extracted content")
         else:
             # If no speak tags, wrap the content
             ssml_content = ssml_text
+            logger.debug(f"⚠️  No <speak> tags found, wrapping content")
         
         # Clean up common issues
         ssml_content = re.sub(r'\n\s*\n', '\n', ssml_content)  # Remove excessive newlines
         ssml_content = ssml_content.strip()
         
+        # Count SSML elements for validation
+        break_count = len(re.findall(r'<break[^>]*>', ssml_content))
+        phoneme_count = len(re.findall(r'<phoneme[^>]*>', ssml_content))
+        emphasis_count = len(re.findall(r'<emphasis[^>]*>', ssml_content))
+        
+        logger.debug(f"📊 SSML elements found - Breaks: {break_count}, Phonemes: {phoneme_count}, Emphasis: {emphasis_count}")
+        
         # Ensure proper SSML structure
-        return f"<speak>{ssml_content}</speak>"
+        final_ssml = f"<speak>{ssml_content}</speak>"
+        final_length = len(final_ssml)
+        
+        logger.debug(f"✅ SSML validation complete: {original_length} → {final_length} chars")
+        
+        return final_ssml
     
     def _basic_ssml_fallback(self, text: str) -> str:
         """
@@ -303,7 +399,8 @@ class DocumentToAudiobookConverter:
     def __init__(self, documents_dir: str = "documents", audios_dir: str = "audios",
                  voice: str = "af_heart", lang_code: str = "a", speed: float = 1.0,
                  openrouter_api_key: str = None, llm_model: str = "anthropic/claude-3.5-sonnet",
-                 enable_llm_preprocessing: bool = True, site_url: str = "", site_title: str = "Document to Audiobook Converter"):
+                 enable_llm_preprocessing: bool = True, site_url: str = "", site_title: str = "Document to Audiobook Converter",
+                 save_preprocessed: bool = True, preprocessed_dir: str = "preprocessed"):
         """
         Initialize the converter.
         
@@ -318,17 +415,23 @@ class DocumentToAudiobookConverter:
             enable_llm_preprocessing: Whether to enable LLM preprocessing
             site_url: Optional site URL for OpenRouter rankings
             site_title: Optional site title for OpenRouter rankings
+            save_preprocessed: Whether to save preprocessed documents to files
+            preprocessed_dir: Directory for saving preprocessed documents
         """
         self.documents_dir = Path(documents_dir)
         self.audios_dir = Path(audios_dir)
+        self.preprocessed_dir = Path(preprocessed_dir)
         self.voice = voice
         self.lang_code = lang_code
         self.speed = speed
         self.enable_llm_preprocessing = enable_llm_preprocessing
+        self.save_preprocessed = save_preprocessed
         
         # Create directories if they don't exist
         self.documents_dir.mkdir(exist_ok=True)
         self.audios_dir.mkdir(exist_ok=True)
+        if self.save_preprocessed:
+            self.preprocessed_dir.mkdir(exist_ok=True)
         
         # Initialize LLM processor if enabled and API key provided
         self.llm_processor = None
@@ -495,6 +598,45 @@ class DocumentToAudiobookConverter:
             
             return text.strip()
     
+    def save_preprocessed_document(self, original_path: Path, preprocessed_text: str) -> Path:
+        """
+        Save preprocessed text to a new file in the preprocessed directory.
+        
+        Args:
+            original_path: Path to the original document
+            preprocessed_text: The preprocessed text content
+            
+        Returns:
+            Path to the saved preprocessed file
+        """
+        if not self.save_preprocessed:
+            return None
+            
+        try:
+            # Create filename with appropriate extension based on preprocessing type
+            if self.llm_processor:
+                # LLM preprocessing generates SSML, save as .ssml
+                preprocessed_filename = original_path.stem + "_preprocessed.ssml"
+            else:
+                # Basic preprocessing, keep original extension
+                preprocessed_filename = original_path.stem + "_preprocessed" + original_path.suffix
+            
+            preprocessed_path = self.preprocessed_dir / preprocessed_filename
+            
+            # Save the preprocessed content
+            with open(preprocessed_path, 'w', encoding='utf-8') as f:
+                f.write(preprocessed_text)
+            
+            file_size = preprocessed_path.stat().st_size
+            file_size_kb = file_size / 1024
+            logger.info(f"💾 Saved preprocessed document: {preprocessed_filename} ({file_size_kb:.1f} KB)")
+            
+            return preprocessed_path
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to save preprocessed document: {e}")
+            return None
+    
     def split_text_into_chunks(self, text: str, max_chunk_size: int = 500) -> List[str]:
         """
         Split text into manageable chunks for TTS processing.
@@ -623,6 +765,10 @@ class DocumentToAudiobookConverter:
             text = self.preprocess_text(text)
             processed_length = len(text)
             logger.debug(f"📝 Text preprocessing: {original_length:,} → {processed_length:,} characters")
+            
+            # Save preprocessed document if enabled
+            if self.save_preprocessed:
+                self.save_preprocessed_document(document_path, text)
             
             if not text.strip():
                 logger.warning(f"⚠️  Document {document_path.name} is empty or contains no readable text")
@@ -808,6 +954,22 @@ def main():
         help="Optional site title for OpenRouter rankings"
     )
     parser.add_argument(
+        "--save-preprocessed",
+        action="store_true",
+        default=True,
+        help="Save preprocessed documents to files (default: enabled)"
+    )
+    parser.add_argument(
+        "--no-save-preprocessed",
+        action="store_true",
+        help="Disable saving preprocessed documents to files"
+    )
+    parser.add_argument(
+        "--preprocessed-dir",
+        default="preprocessed",
+        help="Directory for saving preprocessed documents (default: preprocessed)"
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging"
@@ -821,11 +983,16 @@ def main():
     # Get OpenRouter API key from args or environment
     openrouter_api_key = args.openrouter_api_key or os.getenv('OPENROUTER_API_KEY')
     
+    # Determine if preprocessed documents should be saved
+    save_preprocessed = args.save_preprocessed and not args.no_save_preprocessed
+    
     try:
         logger.info(f"🎯 Document to Audiobook Converter with OpenRouter Integration")
         logger.info(f"📂 Documents directory: {args.documents_dir}")
         logger.info(f"🎵 Audio output directory: {args.audios_dir}")
-        logger.info(f"🗣️  Voice: {args.voice}")
+        if save_preprocessed:
+            logger.info(f"📝 Preprocessed documents directory: {args.preprocessed_dir}")
+        logger.info(f"�️  Voice: {args.voice}")
         logger.info(f"🌍 Language: {'American English' if args.lang_code == 'a' else 'British English'}")
         logger.info(f"⚡ Speed: {args.speed}x")
         
@@ -835,6 +1002,11 @@ def main():
             logger.info(f"📝 LLM preprocessing: Disabled by user")
         else:
             logger.info(f"📝 LLM preprocessing: Disabled (no API key)")
+        
+        if save_preprocessed:
+            logger.info(f"💾 Preprocessed document saving: Enabled")
+        else:
+            logger.info(f"💾 Preprocessed document saving: Disabled")
         
         converter = DocumentToAudiobookConverter(
             documents_dir=args.documents_dir,
@@ -846,7 +1018,9 @@ def main():
             llm_model=args.llm_model,
             enable_llm_preprocessing=not args.disable_llm_preprocessing,
             site_url=args.site_url,
-            site_title=args.site_title
+            site_title=args.site_title,
+            save_preprocessed=save_preprocessed,
+            preprocessed_dir=args.preprocessed_dir
         )
         
         converter.convert_all_documents()

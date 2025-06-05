@@ -14,7 +14,7 @@ OPENROUTER_API_KEY = "your_openrouter_api_key_here"  # Get from https://openrout
 # - "openai/gpt-4o" (good quality)
 # - "openai/gpt-3.5-turbo" (faster, cheaper)
 # - "meta-llama/llama-3.1-8b-instruct" (open source)
-LLM_MODEL = "anthropic/claude-3.5-sonnet"
+LLM_MODEL = "qwen/qwen3-235b-a22b"
 
 # Site information for OpenRouter rankings (optional)
 SITE_URL = "https://your-site.com"  # Optional: your site URL
