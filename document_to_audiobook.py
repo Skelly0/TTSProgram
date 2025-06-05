@@ -190,22 +190,21 @@ class OpenRouterLLMProcessor:
         # Test API connectivity
         self._test_api_connection()
         
-        # System prompt for SSML conversion
+        # System prompt for text conversion optimized for TTS
         self.system_prompt = """You are AudioBookFormatter-v1.
-Convert the user's fantasy-gazetteer chunk into SSML optimized for Kokoro-82M.
+Convert the user's fantasy-gazetteer chunk into clean, speech-optimized text for Kokoro-82M TTS.
 
 Rules:
 • Preserve lore but keep sentences ≤ 30 words and paragraphs ≤ 120 words.
-• Insert <break time="600ms"/> at every top-level heading; <break time="300ms"/> before sub-sections like "Economy".
 • Replace bullet or numbered lists with spoken lists ("First,… Second,… Third,…").
 • Skip map/image captions; instead insert a single sentence starting "Description:" that summarizes what the reader would have seen.
 • Expand unfamiliar acronyms or coinages when first used.
-• When a proper noun looks non-English (e.g. "Launinrach", "Aletia") add <phoneme alphabet="ipa" ph="laʊˈniːnɾax"> tags for pronunciation guidance.
 • Render footnotes inline as parentheticals ("… threatens the elite (see note 1 for background)").
-• Output valid XML inside one <speak> block; no stray characters outside it.
 • If data are obviously tabular (e.g. the province split list) collapse to a single summarizing sentence.
-• Convert headings to narrative sign-posts with emphasis tags.
-• Handle fantasy names and terms with care, adding pronunciation guides where needed.
+• Convert headings to narrative sign-posts using natural emphasis (e.g., "Now, let's explore the Northern Territories").
+• Handle fantasy names and terms with care, spelling them phonetically when pronunciation might be unclear.
+• Use natural pauses with periods and commas instead of markup tags.
+• Output ONLY plain text - no XML, SSML, or markup tags of any kind.
 • Maintain immersion and narrative flow throughout."""
         
         logger.info(f"📋 System prompt configured ({len(self.system_prompt)} chars)")
@@ -290,7 +289,7 @@ Rules:
                     logger.info(f"💰 Estimated cost: ${usage.total_cost:.6f}")
             
             processed_text = completion.choices[0].message.content.strip()
-            logger.info(f"📝 LLM generated {len(processed_text)} characters of SSML")
+            logger.info(f"📝 LLM generated {len(processed_text)} characters of optimized text")
             
             # Log the model's response metadata
             if hasattr(completion.choices[0], 'finish_reason'):
@@ -299,9 +298,9 @@ Rules:
                 if finish_reason == 'length':
                     logger.warning(f"⚠️  Response may be truncated due to max_tokens limit")
             
-            # Validate and clean SSML
-            logger.debug(f"🔍 Validating and cleaning SSML output...")
-            processed_text = self._validate_and_clean_ssml(processed_text)
+            # Validate and clean text
+            logger.debug(f"🔍 Validating and cleaning text output...")
+            processed_text = self._validate_and_clean_text(processed_text)
             
             total_duration = time.time() - chunk_start_time
             logger.info(f"✅ LLM preprocessing complete in {total_duration:.2f}s (API: {api_duration:.2f}s, Processing: {total_duration - api_duration:.2f}s)")
@@ -318,59 +317,43 @@ Rules:
                 logger.error(f"📄 Response body: {e.response.text[:200]}...")
             logger.info(f"🔄 Falling back to basic preprocessing")
             # Fallback to basic preprocessing if LLM fails
-            return self._basic_ssml_fallback(text_chunk)
+            return self._basic_text_fallback(text_chunk)
     
-    def _validate_and_clean_ssml(self, ssml_text: str) -> str:
+    def _validate_and_clean_text(self, text: str) -> str:
         """
-        Validate and clean SSML output from LLM.
+        Validate and clean plain text output from LLM.
         
         Args:
-            ssml_text: Raw SSML from LLM
+            text: Raw text from LLM
             
         Returns:
-            Cleaned and validated SSML
+            Cleaned plain text
         """
-        logger.debug(f"🔍 Validating SSML output ({len(ssml_text)} chars)")
-        original_length = len(ssml_text)
+        logger.debug(f"🔍 Validating text output ({len(text)} chars)")
+        original_length = len(text)
         
-        # Remove any text outside <speak> tags
-        speak_match = re.search(r'<speak[^>]*>(.*?)</speak>', ssml_text, re.DOTALL)
-        if speak_match:
-            ssml_content = speak_match.group(1)
-            logger.debug(f"✅ Found valid <speak> tags, extracted content")
-        else:
-            # If no speak tags, wrap the content
-            ssml_content = ssml_text
-            logger.debug(f"⚠️  No <speak> tags found, wrapping content")
+        # Remove any accidental SSML/XML tags that might have slipped through
+        text = re.sub(r'<[^>]+>', '', text)
         
         # Clean up common issues
-        ssml_content = re.sub(r'\n\s*\n', '\n', ssml_content)  # Remove excessive newlines
-        ssml_content = ssml_content.strip()
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Remove excessive newlines
+        text = re.sub(r'[ \t]+', ' ', text)  # Normalize spaces
+        text = text.strip()
         
-        # Count SSML elements for validation
-        break_count = len(re.findall(r'<break[^>]*>', ssml_content))
-        phoneme_count = len(re.findall(r'<phoneme[^>]*>', ssml_content))
-        emphasis_count = len(re.findall(r'<emphasis[^>]*>', ssml_content))
+        final_length = len(text)
+        logger.debug(f"✅ Text validation complete: {original_length} → {final_length} chars")
         
-        logger.debug(f"📊 SSML elements found - Breaks: {break_count}, Phonemes: {phoneme_count}, Emphasis: {emphasis_count}")
-        
-        # Ensure proper SSML structure
-        final_ssml = f"<speak>{ssml_content}</speak>"
-        final_length = len(final_ssml)
-        
-        logger.debug(f"✅ SSML validation complete: {original_length} → {final_length} chars")
-        
-        return final_ssml
+        return text
     
-    def _basic_ssml_fallback(self, text: str) -> str:
+    def _basic_text_fallback(self, text: str) -> str:
         """
-        Basic SSML conversion as fallback when LLM processing fails.
+        Basic text conversion as fallback when LLM processing fails.
         
         Args:
             text: Raw text to convert
             
         Returns:
-            Basic SSML-formatted text
+            Basic cleaned text
         """
         # Basic text cleaning
         text = re.sub(r'\s+', ' ', text)
@@ -380,18 +363,16 @@ Rules:
         text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # Remove links
         text = re.sub(r'\[(\d+)\]', r'(see note \1)', text)  # Convert footnotes
         
-        # Add basic SSML structure
+        # Clean up paragraphs
         paragraphs = text.split('\n\n')
-        ssml_paragraphs = []
+        clean_paragraphs = []
         
         for para in paragraphs:
             para = para.strip()
             if para:
-                # Add breaks between paragraphs
-                ssml_paragraphs.append(f"<p>{para}</p>")
+                clean_paragraphs.append(para)
         
-        ssml_content = '<break time="300ms"/>'.join(ssml_paragraphs)
-        return f"<speak>{ssml_content}</speak>"
+        return '\n\n'.join(clean_paragraphs)
 
 class DocumentToAudiobookConverter:
     """Main converter class for processing documents to audiobooks."""
