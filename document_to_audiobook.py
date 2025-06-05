@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Document to Audiobook Converter using Kokoro-82M TTS
-Converts text documents to audio files using the Kokoro TTS model.
+Document to Audiobook Converter using Kokoro-82M TTS with OpenRouter LLM preprocessing
+Converts text documents to audio files using LLM preprocessing and Kokoro TTS model.
 """
 
 import os
@@ -9,20 +9,57 @@ import sys
 import argparse
 from pathlib import Path
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import re
 import time
 from datetime import datetime, timedelta
+import urllib.request
+import socket
+import json
+
+# Load environment variables from .env file if it exists
+def load_env_file():
+    """Load environment variables from .env file if it exists."""
+    env_file = Path('.env')
+    if env_file.exists():
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key.strip()] = value.strip()
+
+# Load .env file at startup
+load_env_file()
 
 try:
     from kokoro import KPipeline
     import soundfile as sf
     import torch
+    from openai import OpenAI
+    import requests
 except ImportError as e:
     print(f"Error importing required libraries: {e}")
     print("Please install required dependencies:")
-    print("pip install kokoro==0.9.4 soundfile torch")
+    print("pip install kokoro==0.9.4 soundfile torch openai requests")
     sys.exit(1)
+
+def check_network_connectivity() -> bool:
+    """Check if we can connect to Hugging Face Hub."""
+    try:
+        # Try to connect to Hugging Face Hub
+        socket.create_connection(("huggingface.co", 443), timeout=10)
+        return True
+    except (socket.error, socket.timeout):
+        return False
+
+def check_huggingface_hub() -> bool:
+    """Check if Hugging Face Hub is accessible."""
+    try:
+        urllib.request.urlopen("https://huggingface.co", timeout=10)
+        return True
+    except Exception:
+        return False
 
 # Configure logging with more detailed format
 logging.basicConfig(
@@ -113,11 +150,160 @@ class ProgressTracker:
 # Global progress tracker instance
 progress_tracker = ProgressTracker()
 
+class OpenRouterLLMProcessor:
+    """Handles LLM preprocessing of text using OpenRouter API."""
+    
+    def __init__(self, api_key: str, model: str = "anthropic/claude-3.5-sonnet",
+                 site_url: str = "", site_title: str = "Document to Audiobook Converter"):
+        """
+        Initialize the OpenRouter LLM processor.
+        
+        Args:
+            api_key: OpenRouter API key
+            model: Model to use (default: anthropic/claude-3.5-sonnet)
+            site_url: Optional site URL for OpenRouter rankings
+            site_title: Optional site title for OpenRouter rankings
+        """
+        self.api_key = api_key
+        self.model = model
+        self.site_url = site_url
+        self.site_title = site_title
+        
+        # Initialize OpenAI client with OpenRouter endpoint
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+        
+        # System prompt for SSML conversion
+        self.system_prompt = """You are AudioBookFormatter-v1.
+Convert the user's fantasy-gazetteer chunk into SSML optimized for Kokoro-82M.
+
+Rules:
+• Preserve lore but keep sentences ≤ 30 words and paragraphs ≤ 120 words.
+• Insert <break time="600ms"/> at every top-level heading; <break time="300ms"/> before sub-sections like "Economy".
+• Replace bullet or numbered lists with spoken lists ("First,… Second,… Third,…").
+• Skip map/image captions; instead insert a single sentence starting "Description:" that summarizes what the reader would have seen.
+• Expand unfamiliar acronyms or coinages when first used.
+• When a proper noun looks non-English (e.g. "Launinrach", "Aletia") add <phoneme alphabet="ipa" ph="laʊˈniːnɾax"> tags for pronunciation guidance.
+• Render footnotes inline as parentheticals ("… threatens the elite (see note 1 for background)").
+• Output valid XML inside one <speak> block; no stray characters outside it.
+• If data are obviously tabular (e.g. the province split list) collapse to a single summarizing sentence.
+• Convert headings to narrative sign-posts with emphasis tags.
+• Handle fantasy names and terms with care, adding pronunciation guides where needed.
+• Maintain immersion and narrative flow throughout."""
+
+    def preprocess_text_chunk(self, text_chunk: str) -> str:
+        """
+        Preprocess a text chunk using OpenRouter LLM to create SSML.
+        
+        Args:
+            text_chunk: Raw text chunk to process
+            
+        Returns:
+            SSML-formatted text optimized for Kokoro-82M
+        """
+        try:
+            logger.debug(f"🤖 Processing chunk with LLM ({len(text_chunk)} chars)")
+            
+            # Prepare headers for OpenRouter
+            headers = {
+                "Content-Type": "application/json"
+            }
+            if self.site_url:
+                headers["HTTP-Referer"] = self.site_url
+            if self.site_title:
+                headers["X-Title"] = self.site_title
+            
+            # Make API call to OpenRouter
+            completion = self.client.chat.completions.create(
+                extra_headers=headers,
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": text_chunk}
+                ],
+                temperature=0.3,  # Lower temperature for more consistent formatting
+                max_tokens=4000   # Generous limit for SSML output
+            )
+            
+            processed_text = completion.choices[0].message.content.strip()
+            
+            # Validate and clean SSML
+            processed_text = self._validate_and_clean_ssml(processed_text)
+            
+            logger.debug(f"✅ LLM processing complete ({len(processed_text)} chars)")
+            return processed_text
+            
+        except Exception as e:
+            logger.warning(f"⚠️  LLM preprocessing failed: {e}")
+            logger.info(f"🔄 Falling back to basic preprocessing")
+            # Fallback to basic preprocessing if LLM fails
+            return self._basic_ssml_fallback(text_chunk)
+    
+    def _validate_and_clean_ssml(self, ssml_text: str) -> str:
+        """
+        Validate and clean SSML output from LLM.
+        
+        Args:
+            ssml_text: Raw SSML from LLM
+            
+        Returns:
+            Cleaned and validated SSML
+        """
+        # Remove any text outside <speak> tags
+        speak_match = re.search(r'<speak[^>]*>(.*?)</speak>', ssml_text, re.DOTALL)
+        if speak_match:
+            ssml_content = speak_match.group(1)
+        else:
+            # If no speak tags, wrap the content
+            ssml_content = ssml_text
+        
+        # Clean up common issues
+        ssml_content = re.sub(r'\n\s*\n', '\n', ssml_content)  # Remove excessive newlines
+        ssml_content = ssml_content.strip()
+        
+        # Ensure proper SSML structure
+        return f"<speak>{ssml_content}</speak>"
+    
+    def _basic_ssml_fallback(self, text: str) -> str:
+        """
+        Basic SSML conversion as fallback when LLM processing fails.
+        
+        Args:
+            text: Raw text to convert
+            
+        Returns:
+            Basic SSML-formatted text
+        """
+        # Basic text cleaning
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'#{1,6}\s*', '', text)  # Remove markdown headers
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Remove bold
+        text = re.sub(r'\*(.*?)\*', r'\1', text)  # Remove italic
+        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # Remove links
+        text = re.sub(r'\[(\d+)\]', r'(see note \1)', text)  # Convert footnotes
+        
+        # Add basic SSML structure
+        paragraphs = text.split('\n\n')
+        ssml_paragraphs = []
+        
+        for para in paragraphs:
+            para = para.strip()
+            if para:
+                # Add breaks between paragraphs
+                ssml_paragraphs.append(f"<p>{para}</p>")
+        
+        ssml_content = '<break time="300ms"/>'.join(ssml_paragraphs)
+        return f"<speak>{ssml_content}</speak>"
+
 class DocumentToAudiobookConverter:
     """Main converter class for processing documents to audiobooks."""
     
-    def __init__(self, documents_dir: str = "documents", audios_dir: str = "audios", 
-                 voice: str = "af_heart", lang_code: str = "a", speed: float = 1.0):
+    def __init__(self, documents_dir: str = "documents", audios_dir: str = "audios",
+                 voice: str = "af_heart", lang_code: str = "a", speed: float = 1.0,
+                 openrouter_api_key: str = None, llm_model: str = "anthropic/claude-3.5-sonnet",
+                 enable_llm_preprocessing: bool = True, site_url: str = "", site_title: str = "Document to Audiobook Converter"):
         """
         Initialize the converter.
         
@@ -127,26 +313,108 @@ class DocumentToAudiobookConverter:
             voice: Voice model to use (af_heart, af_bella, af_sarah, am_adam, am_michael)
             lang_code: Language code ('a' for American English, 'b' for British English)
             speed: Speech speed multiplier (1.0 = normal speed)
+            openrouter_api_key: OpenRouter API key for LLM preprocessing
+            llm_model: LLM model to use for preprocessing
+            enable_llm_preprocessing: Whether to enable LLM preprocessing
+            site_url: Optional site URL for OpenRouter rankings
+            site_title: Optional site title for OpenRouter rankings
         """
         self.documents_dir = Path(documents_dir)
         self.audios_dir = Path(audios_dir)
         self.voice = voice
         self.lang_code = lang_code
         self.speed = speed
+        self.enable_llm_preprocessing = enable_llm_preprocessing
         
         # Create directories if they don't exist
         self.documents_dir.mkdir(exist_ok=True)
         self.audios_dir.mkdir(exist_ok=True)
         
+        # Initialize LLM processor if enabled and API key provided
+        self.llm_processor = None
+        if enable_llm_preprocessing and openrouter_api_key:
+            try:
+                logger.info(f"🤖 Initializing OpenRouter LLM processor...")
+                logger.info(f"📋 Model: {llm_model}")
+                self.llm_processor = OpenRouterLLMProcessor(
+                    api_key=openrouter_api_key,
+                    model=llm_model,
+                    site_url=site_url,
+                    site_title=site_title
+                )
+                logger.info(f"✅ LLM preprocessing enabled")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to initialize LLM processor: {e}")
+                logger.info(f"🔄 Continuing without LLM preprocessing")
+                self.llm_processor = None
+        elif enable_llm_preprocessing and not openrouter_api_key:
+            logger.warning(f"⚠️  LLM preprocessing requested but no API key provided")
+            logger.info(f"💡 Set OPENROUTER_API_KEY environment variable or use --openrouter-api-key")
+            logger.info(f"🔄 Continuing without LLM preprocessing")
+        else:
+            logger.info(f"📝 LLM preprocessing disabled - using basic text processing")
+        
         # Initialize Kokoro pipeline
+        self.pipeline = None
+        self._initialize_pipeline()
+        
+    def _initialize_pipeline(self):
+        """Initialize the Kokoro TTS pipeline with fallback options."""
+        logger.info(f"🔧 Initializing Kokoro TTS pipeline...")
+        logger.info(f"🗣️  Voice: {self.voice}, Language: {'American English' if self.lang_code == 'a' else 'British English'}, Speed: {self.speed}x")
+        
+        # Check network connectivity first
+        logger.info("🌐 Checking network connectivity...")
+        if not check_network_connectivity():
+            logger.error("❌ No internet connection detected")
+            raise RuntimeError("No internet connection. Please check your network and try again.")
+        
+        if not check_huggingface_hub():
+            logger.error("❌ Cannot reach Hugging Face Hub")
+            raise RuntimeError("Cannot connect to Hugging Face Hub. Please check your connection and try again.")
+        
+        logger.info("✅ Network connectivity confirmed")
+        
+        # List of model repositories to try in order of preference
+        model_repos = [
+            "hexgrad/Kokoro-82M",
+            "onnx-community/Kokoro-82M-v1.0-ONNX"
+        ]
+        
+        for repo_id in model_repos:
+            try:
+                logger.info(f"🔄 Attempting to load model from: {repo_id}")
+                self.pipeline = KPipeline(lang_code=self.lang_code, repo_id=repo_id)
+                logger.info(f"✅ Kokoro pipeline initialized successfully with {repo_id}")
+                return
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to load {repo_id}: {e}")
+                continue
+        
+        # If all models fail, try without specifying repo_id (use default)
         try:
-            logger.info(f"🔧 Initializing Kokoro TTS pipeline...")
-            self.pipeline = KPipeline(lang_code=lang_code)
-            logger.info(f"✅ Kokoro pipeline initialized successfully")
-            logger.info(f"🗣️  Voice: {voice}, Language: {'American English' if lang_code == 'a' else 'British English'}, Speed: {speed}x")
+            logger.info(f"🔄 Attempting to load default model...")
+            self.pipeline = KPipeline(lang_code=self.lang_code)
+            logger.info(f"✅ Kokoro pipeline initialized successfully with default model")
+            return
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Kokoro pipeline: {e}")
-            raise
+            logger.error(f"❌ Failed to initialize Kokoro pipeline with default model: {e}")
+        
+        # Final fallback: provide helpful error message
+        error_msg = (
+            "Failed to initialize Kokoro TTS pipeline. This could be due to:\n"
+            "1. Model files are corrupted or missing from Hugging Face Hub\n"
+            "2. Authentication issues with Hugging Face\n"
+            "3. Insufficient disk space for model download\n"
+            "4. Temporary server issues\n\n"
+            "Solutions to try:\n"
+            "- Clear Hugging Face cache: huggingface-cli delete-cache\n"
+            "- Login to Hugging Face: huggingface-cli login\n"
+            "- Try again in a few minutes\n"
+            "- Check available disk space"
+        )
+        logger.error(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
     
     def get_supported_file_types(self) -> List[str]:
         """Get list of supported document file extensions."""
@@ -189,36 +457,43 @@ class DocumentToAudiobookConverter:
     
     def preprocess_text(self, text: str) -> str:
         """
-        Preprocess text for better TTS output.
+        Preprocess text for better TTS output using LLM if available.
         
         Args:
             text: Raw text content
             
         Returns:
-            Preprocessed text
+            Preprocessed text (SSML if LLM enabled, plain text otherwise)
         """
-        # Remove excessive whitespace
-        text = re.sub(r'\s+', ' ', text)
-        
-        # Remove markdown formatting
-        text = re.sub(r'#{1,6}\s*', '', text)  # Headers
-        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Bold
-        text = re.sub(r'\*(.*?)\*', r'\1', text)  # Italic
-        text = re.sub(r'`(.*?)`', r'\1', text)  # Code
-        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # Links
-        
-        # Clean up special characters that might cause issues
-        text = text.replace('—', '-')
-        text = text.replace('–', '-')
-        text = text.replace('"', '"')
-        text = text.replace('"', '"')
-        text = text.replace(''', "'")
-        text = text.replace(''', "'")
-        
-        # Ensure proper sentence endings
-        text = re.sub(r'([.!?])\s*([A-Z])', r'\1 \2', text)
-        
-        return text.strip()
+        if self.llm_processor:
+            # Use LLM preprocessing to generate SSML
+            logger.debug(f"🤖 Using LLM preprocessing for enhanced SSML generation")
+            return text  # Return raw text - LLM processing happens per chunk
+        else:
+            # Use basic preprocessing
+            logger.debug(f"📝 Using basic text preprocessing")
+            # Remove excessive whitespace
+            text = re.sub(r'\s+', ' ', text)
+            
+            # Remove markdown formatting
+            text = re.sub(r'#{1,6}\s*', '', text)  # Headers
+            text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # Bold
+            text = re.sub(r'\*(.*?)\*', r'\1', text)  # Italic
+            text = re.sub(r'`(.*?)`', r'\1', text)  # Code
+            text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # Links
+            
+            # Clean up special characters that might cause issues
+            text = text.replace('—', '-')
+            text = text.replace('–', '-')
+            text = text.replace('"', '"')
+            text = text.replace('"', '"')
+            text = text.replace(''', "'")
+            text = text.replace(''', "'")
+            
+            # Ensure proper sentence endings
+            text = re.sub(r'([.!?])\s*([A-Z])', r'\1 \2', text)
+            
+            return text.strip()
     
     def split_text_into_chunks(self, text: str, max_chunk_size: int = 500) -> List[str]:
         """
@@ -287,8 +562,15 @@ class DocumentToAudiobookConverter:
         try:
             logger.debug(f"🎵 Generating audio for chunk ({len(text_chunk.split())} words)")
             
+            # Preprocess chunk with LLM if available
+            if self.llm_processor:
+                processed_chunk = self.llm_processor.preprocess_text_chunk(text_chunk)
+                logger.debug(f"🤖 LLM processed chunk: {len(processed_chunk)} chars")
+            else:
+                processed_chunk = text_chunk
+            
             generator = self.pipeline(
-                text_chunk,
+                processed_chunk,
                 voice=self.voice,
                 speed=self.speed,
                 split_pattern=r'\n+'
@@ -470,16 +752,16 @@ class DocumentToAudiobookConverter:
 def main():
     """Main function to run the document to audiobook converter."""
     parser = argparse.ArgumentParser(
-        description="Convert documents to audiobooks using Kokoro-82M TTS"
+        description="Convert documents to audiobooks using Kokoro-82M TTS with optional OpenRouter LLM preprocessing"
     )
     parser.add_argument(
-        "--documents-dir", 
+        "--documents-dir",
         default="documents",
         help="Directory containing input documents (default: documents)"
     )
     parser.add_argument(
         "--audios-dir",
-        default="audios", 
+        default="audios",
         help="Directory for output audio files (default: audios)"
     )
     parser.add_argument(
@@ -501,6 +783,31 @@ def main():
         help="Speech speed multiplier (default: 1.0)"
     )
     parser.add_argument(
+        "--openrouter-api-key",
+        default=None,
+        help="OpenRouter API key for LLM preprocessing (can also use OPENROUTER_API_KEY env var)"
+    )
+    parser.add_argument(
+        "--llm-model",
+        default="anthropic/claude-3.5-sonnet",
+        help="LLM model to use for preprocessing (default: anthropic/claude-3.5-sonnet)"
+    )
+    parser.add_argument(
+        "--disable-llm-preprocessing",
+        action="store_true",
+        help="Disable LLM preprocessing and use basic text processing only"
+    )
+    parser.add_argument(
+        "--site-url",
+        default="",
+        help="Optional site URL for OpenRouter rankings"
+    )
+    parser.add_argument(
+        "--site-title",
+        default="Document to Audiobook Converter",
+        help="Optional site title for OpenRouter rankings"
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging"
@@ -511,20 +818,35 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
+    # Get OpenRouter API key from args or environment
+    openrouter_api_key = args.openrouter_api_key or os.getenv('OPENROUTER_API_KEY')
+    
     try:
-        logger.info(f"🎯 Document to Audiobook Converter")
+        logger.info(f"🎯 Document to Audiobook Converter with OpenRouter Integration")
         logger.info(f"📂 Documents directory: {args.documents_dir}")
         logger.info(f"🎵 Audio output directory: {args.audios_dir}")
         logger.info(f"🗣️  Voice: {args.voice}")
         logger.info(f"🌍 Language: {'American English' if args.lang_code == 'a' else 'British English'}")
         logger.info(f"⚡ Speed: {args.speed}x")
         
+        if not args.disable_llm_preprocessing and openrouter_api_key:
+            logger.info(f"🤖 LLM preprocessing: Enabled ({args.llm_model})")
+        elif args.disable_llm_preprocessing:
+            logger.info(f"📝 LLM preprocessing: Disabled by user")
+        else:
+            logger.info(f"📝 LLM preprocessing: Disabled (no API key)")
+        
         converter = DocumentToAudiobookConverter(
             documents_dir=args.documents_dir,
             audios_dir=args.audios_dir,
             voice=args.voice,
             lang_code=args.lang_code,
-            speed=args.speed
+            speed=args.speed,
+            openrouter_api_key=openrouter_api_key,
+            llm_model=args.llm_model,
+            enable_llm_preprocessing=not args.disable_llm_preprocessing,
+            site_url=args.site_url,
+            site_title=args.site_title
         )
         
         converter.convert_all_documents()

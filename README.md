@@ -148,11 +148,22 @@ python document_to_audiobook.py \
 
 ## Troubleshooting
 
-### Common Issues
+### Quick Fixes for Common Issues
 
-**"Failed to initialize Kokoro pipeline"**
-- Ensure espeak is properly installed
-- Check that all dependencies are installed correctly
+**"Failed to initialize Kokoro pipeline" or "Cannot find files on Hub"**
+1. **Check internet connection**: The program needs to download the TTS model on first run
+2. **Use the model download helper**:
+   ```bash
+   python download_model.py
+   ```
+3. **Clear model cache if corrupted**:
+   ```bash
+   huggingface-cli delete-cache
+   ```
+4. **Try manual model download**:
+   ```bash
+   python -c "from huggingface_hub import snapshot_download; snapshot_download('hexgrad/Kokoro-82M')"
+   ```
 
 **"No supported documents found"**
 - Verify documents are in the correct directory
@@ -165,6 +176,15 @@ python document_to_audiobook.py \
 **Memory Issues with Large Documents**
 - The program automatically chunks large documents
 - For very large files, consider splitting them manually
+
+### Detailed Troubleshooting
+
+For comprehensive troubleshooting information, see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) which includes:
+- Network connectivity issues
+- Model download problems
+- Alternative TTS solutions
+- Corporate firewall/proxy configurations
+- Performance optimization tips
 
 ### Performance Tips
 
