@@ -25,7 +25,7 @@ fi
 if [ ! -d "preprocessed" ]; then
     echo "ERROR: preprocessed folder not found"
     echo "Please run preprocessing first using ./run_preprocessing.sh"
-    echo "or python preprocess_documents.py"
+    echo "or python src/preprocess_documents.py"
     exit 1
 fi
 
@@ -34,7 +34,7 @@ count=$(find preprocessed -type f | wc -l)
 if [ $count -eq 0 ]; then
     echo "ERROR: No files found in preprocessed folder"
     echo "Please run preprocessing first using ./run_preprocessing.sh"
-    echo "or python preprocess_documents.py"
+    echo "or python src/preprocess_documents.py"
     exit 1
 fi
 
@@ -43,7 +43,7 @@ echo "Starting TTS processing..."
 echo
 
 # Run the TTS script with verbose output
-$PYTHON_CMD run_tts.py --verbose "$@"
+$PYTHON_CMD src/run_tts.py --verbose "$@"
 
 echo
 echo "========================================"

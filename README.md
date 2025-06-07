@@ -52,9 +52,64 @@ A simple Python program that converts text documents into audiobooks using the K
    sudo apt-get install espeak espeak-data
    ```
 
+## Project Structure
+
+The project is organized into the following directories:
+
+```
+TTSProgram/
+├── src/                    # Main Python source code
+│   ├── document_to_audiobook.py    # All-in-one converter
+│   ├── preprocess_documents.py     # LLM preprocessing
+│   ├── run_tts.py                  # TTS conversion
+│   └── run_with_config.py          # Config-based runner
+├── scripts/                # Batch and shell scripts
+│   ├── run_converter.bat/.sh       # All-in-one scripts
+│   ├── run_preprocessing.bat/.sh   # Preprocessing scripts
+│   └── run_tts_only.bat/.sh        # TTS-only scripts
+├── config/                 # Configuration files
+│   ├── config.example.py           # Example configuration
+│   └── .env.example               # Environment variables
+├── docs/                   # Documentation
+├── tests/                  # Test files
+├── documents/              # Input documents (created automatically)
+├── audios/                 # Output audio files (created automatically)
+├── preprocessed/           # Preprocessed documents (created automatically)
+└── run_with_config.py      # Main entry point using config.py
+```
+
 ## Usage
 
-### Quick Start (All-in-One)
+### Quick Start (Using Config File - Recommended)
+
+1. **Set up configuration**:
+   ```bash
+   # Copy the example config
+   cp config/config.example.py config/config.py
+   
+   # Edit config/config.py with your settings
+   # Add your OpenRouter API key if using LLM preprocessing
+   ```
+
+2. **Create the documents folder** (if it doesn't exist):
+   ```bash
+   mkdir documents
+   ```
+
+3. **Add your text documents** to the `documents` folder:
+   - Supported formats: `.txt`, `.md`, `.rtf`
+   - Example: `documents/my_book.txt`, `documents/article.md`
+
+4. **Run the converter**:
+   ```bash
+   python run_with_config.py
+   ```
+
+5. **Find your audiobooks** in the `audios` folder:
+   - Output format: `.wav` files
+   - Same filename as input: `my_book.wav`, `article.wav`
+
+### Quick Start (Direct Command Line)
 
 1. **Create the documents folder** (if it doesn't exist):
    ```bash
@@ -67,7 +122,7 @@ A simple Python program that converts text documents into audiobooks using the K
 
 3. **Run the converter**:
    ```bash
-   python document_to_audiobook.py
+   python src/document_to_audiobook.py
    ```
 
 4. **Find your audiobooks** in the `audios` folder:
@@ -82,17 +137,17 @@ For better control and to leverage LLM preprocessing, use the two-step approach:
 
 **Using batch scripts (Windows):**
 ```bash
-run_preprocessing.bat
+scripts\run_preprocessing.bat
 ```
 
 **Using shell scripts (Linux/Mac):**
 ```bash
-./run_preprocessing.sh
+./scripts/run_preprocessing.sh
 ```
 
 **Using Python directly:**
 ```bash
-python preprocess_documents.py --verbose
+python src/preprocess_documents.py --verbose
 ```
 
 This will:
@@ -104,17 +159,17 @@ This will:
 
 **Using batch scripts (Windows):**
 ```bash
-run_tts_only.bat
+scripts\run_tts_only.bat
 ```
 
 **Using shell scripts (Linux/Mac):**
 ```bash
-./run_tts_only.sh
+./scripts/run_tts_only.sh
 ```
 
 **Using Python directly:**
 ```bash
-python run_tts.py --verbose
+python src/run_tts.py --verbose
 ```
 
 This will:
@@ -148,67 +203,67 @@ To use LLM preprocessing, you need an OpenRouter API key:
 #### Custom Directories
 ```bash
 # All-in-one converter
-python document_to_audiobook.py --documents-dir "my_docs" --audios-dir "my_audiobooks"
+python src/document_to_audiobook.py --documents-dir "my_docs" --audios-dir "my_audiobooks"
 
 # Preprocessing only
-python preprocess_documents.py --documents-dir "my_docs" --preprocessed-dir "my_preprocessed"
+python src/preprocess_documents.py --documents-dir "my_docs" --preprocessed-dir "my_preprocessed"
 
 # TTS only
-python run_tts.py --preprocessed-dir "my_preprocessed" --audios-dir "my_audiobooks"
+python src/run_tts.py --preprocessed-dir "my_preprocessed" --audios-dir "my_audiobooks"
 ```
 
 #### Different Voice Models
 ```bash
 # Female voices
-python document_to_audiobook.py --voice af_heart    # Default female voice
-python document_to_audiobook.py --voice af_bella    # Alternative female voice
-python document_to_audiobook.py --voice af_sarah    # Another female voice
+python src/document_to_audiobook.py --voice af_heart    # Default female voice
+python src/document_to_audiobook.py --voice af_bella    # Alternative female voice
+python src/document_to_audiobook.py --voice af_sarah    # Another female voice
 
 # Male voices
-python document_to_audiobook.py --voice am_adam     # Male voice
-python document_to_audiobook.py --voice am_michael  # Alternative male voice
+python src/document_to_audiobook.py --voice am_adam     # Male voice
+python src/document_to_audiobook.py --voice am_michael  # Alternative male voice
 ```
 
 #### Language Options
 ```bash
-python document_to_audiobook.py --lang-code a  # American English (default)
-python document_to_audiobook.py --lang-code b  # British English
+python src/document_to_audiobook.py --lang-code a  # American English (default)
+python src/document_to_audiobook.py --lang-code b  # British English
 ```
 
 #### Speech Speed
 ```bash
-python document_to_audiobook.py --speed 0.8  # Slower speech
-python document_to_audiobook.py --speed 1.2  # Faster speech
-python document_to_audiobook.py --speed 1.0  # Normal speed (default)
+python src/document_to_audiobook.py --speed 0.8  # Slower speech
+python src/document_to_audiobook.py --speed 1.2  # Faster speech
+python src/document_to_audiobook.py --speed 1.0  # Normal speed (default)
 ```
 
 #### LLM Model Selection
 ```bash
 # Use different LLM models for preprocessing
-python preprocess_documents.py --llm-model "anthropic/claude-3-haiku"  # Faster, cheaper
-python preprocess_documents.py --llm-model "openai/gpt-4o"            # Alternative model
-python preprocess_documents.py --llm-model "anthropic/claude-3.5-sonnet"  # Default, best quality
+python src/preprocess_documents.py --llm-model "anthropic/claude-3-haiku"  # Faster, cheaper
+python src/preprocess_documents.py --llm-model "openai/gpt-4o"            # Alternative model
+python src/preprocess_documents.py --llm-model "anthropic/claude-3.5-sonnet"  # Default, best quality
 ```
 
 #### Chunk Size Control
 ```bash
 # Adjust chunk sizes for processing
-python preprocess_documents.py --max-chunk-size 800    # Larger chunks for LLM
-python run_tts.py --max-chunk-size 400                 # Smaller chunks for TTS
+python src/preprocess_documents.py --max-chunk-size 800    # Larger chunks for LLM
+python src/run_tts.py --max-chunk-size 400                 # Smaller chunks for TTS
 ```
 
 #### Verbose Output
 ```bash
-python document_to_audiobook.py --verbose
-python preprocess_documents.py --verbose
-python run_tts.py --verbose
+python src/document_to_audiobook.py --verbose
+python src/preprocess_documents.py --verbose
+python src/run_tts.py --verbose
 ```
 
 ### Complete Examples
 
 **All-in-one with LLM preprocessing:**
 ```bash
-python document_to_audiobook.py \
+python src/document_to_audiobook.py \
     --documents-dir "books" \
     --audios-dir "audiobooks" \
     --voice af_bella \
@@ -221,7 +276,7 @@ python document_to_audiobook.py \
 **Two-step workflow:**
 ```bash
 # Step 1: Preprocess with LLM
-python preprocess_documents.py \
+python src/preprocess_documents.py \
     --documents-dir "books" \
     --preprocessed-dir "processed" \
     --llm-model "anthropic/claude-3.5-sonnet" \
@@ -229,7 +284,7 @@ python preprocess_documents.py \
     --verbose
 
 # Step 2: Generate audio
-python run_tts.py \
+python src/run_tts.py \
     --preprocessed-dir "processed" \
     --audios-dir "audiobooks" \
     --voice af_bella \

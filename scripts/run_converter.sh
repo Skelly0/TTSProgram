@@ -28,8 +28,8 @@ if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$PYTHON_VERSION" | sort -V | head -n1
 fi
 
 # Check if the main script exists
-if [ ! -f "document_to_audiobook.py" ]; then
-    echo "Error: document_to_audiobook.py not found"
+if [ ! -f "src/document_to_audiobook.py" ]; then
+    echo "Error: src/document_to_audiobook.py not found"
     echo "Please make sure you're running this from the correct directory"
     exit 1
 fi
@@ -56,7 +56,7 @@ fi
 
 echo "Starting conversion..."
 echo
-$PYTHON_CMD document_to_audiobook.py
+$PYTHON_CMD src/document_to_audiobook.py
 
 echo
 echo "Conversion completed!"

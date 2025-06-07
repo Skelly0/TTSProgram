@@ -20,7 +20,7 @@ REM Check if preprocessed folder exists and has files
 if not exist preprocessed (
     echo ERROR: preprocessed folder not found
     echo Please run preprocessing first using run_preprocessing.bat
-    echo or python preprocess_documents.py
+    echo or python src\preprocess_documents.py
     pause
     exit /b 1
 )
@@ -31,7 +31,7 @@ for %%f in (preprocessed\*.*) do set /a count+=1
 if %count%==0 (
     echo ERROR: No files found in preprocessed folder
     echo Please run preprocessing first using run_preprocessing.bat
-    echo or python preprocess_documents.py
+    echo or python src\preprocess_documents.py
     pause
     exit /b 1
 )
@@ -41,7 +41,7 @@ echo Starting TTS processing...
 echo.
 
 REM Run the TTS script with verbose output
-python run_tts.py --verbose %*
+python src\run_tts.py --verbose %*
 
 echo.
 echo ========================================

@@ -13,8 +13,8 @@ if errorlevel 1 (
 )
 
 REM Check if the main script exists
-if not exist "document_to_audiobook.py" (
-    echo Error: document_to_audiobook.py not found
+if not exist "src\document_to_audiobook.py" (
+    echo Error: src\document_to_audiobook.py not found
     echo Please make sure you're running this from the correct directory
     pause
     exit /b 1
@@ -45,7 +45,7 @@ if errorlevel 1 (
 
 echo Starting conversion...
 echo.
-python document_to_audiobook.py
+python src\document_to_audiobook.py
 
 echo.
 echo Conversion completed!

@@ -34,7 +34,7 @@ echo "Starting document preprocessing..."
 echo
 
 # Run the preprocessing script with verbose output
-$PYTHON_CMD preprocess_documents.py --verbose "$@"
+$PYTHON_CMD src/preprocess_documents.py --verbose "$@"
 
 echo
 echo "========================================"

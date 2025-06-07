@@ -29,7 +29,7 @@ echo Starting document preprocessing...
 echo.
 
 REM Run the preprocessing script with verbose output
-python preprocess_documents.py --verbose %*
+python src\preprocess_documents.py --verbose %*
 
 echo.
 echo ========================================

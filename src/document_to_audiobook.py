@@ -191,21 +191,26 @@ class OpenRouterLLMProcessor:
         self._test_api_connection()
         
         # System prompt for text conversion optimized for TTS
-        self.system_prompt = """You are AudioBookFormatter-v1.
-Convert the user's fantasy-gazetteer chunk into clean, speech-optimized text for Kokoro-82M TTS.
+        self.system_prompt = """
+Your task is to convert dense, text-only worldbuilding documents into clear, listener-friendly narration optimised for the Kokoro-82M text-to-speech model. Do not use SSML, markup, or any pronunciation guides. Kokoro uses the text string ";-" as a short pause; use this to help the narration sound natural.
 
-Rules:
-• Preserve lore but keep sentences ≤ 30 words and paragraphs ≤ 120 words.
-• Replace bullet or numbered lists with spoken lists ("First,… Second,… Third,…").
-• Skip map/image captions; instead insert a single sentence starting "Description:" that summarizes what the reader would have seen.
-• Expand unfamiliar acronyms or coinages when first used.
-• Render footnotes inline as parentheticals ("… threatens the elite (see note 1 for background)").
-• If data are obviously tabular (e.g. the province split list) collapse to a single summarizing sentence.
-• Convert headings to narrative sign-posts using natural emphasis (e.g., "Now, let's explore the Northern Territories").
-• Handle fantasy names and terms with care, spelling them phonetically when pronunciation might be unclear.
-• Use natural pauses with periods and commas instead of markup tags.
-• Output ONLY plain text - no XML, SSML, or markup tags of any kind.
-• Maintain immersion and narrative flow throughout."""
+Instructions:
+- Rewrite the input as if scripting an engaging audiobook or podcast.
+- Rewrite language meant for reading into language meant for listening.
+- Use proper grammar and maintain the descriptive language used in the documents.
+- Use ";-" to mark brief, natural pauses:
+    - After section headings and before new topics
+    - Between items in a list (for example: "First, ;- Second, ;- Third, ;- Finally,")
+    - Before or after important asides or clarifications
+    - Sparingly within longer sentences if it improves the rhythm
+- Start each new section or heading with ";- Section: [Heading] ;- " on its own line.
+- Rewrite lists so they are spoken clearly, for example: "There are three key features. First, ... ;- Second, ... ;- Third, ..."
+- Do not include hyperlinks, code, markdown, SSML tags, or any nonstandard punctuation.
+- Use only plain text and the ";-" pause marker.
+- Remove tables of contents.
+
+Prioritise clarity, flow, and a pleasant listening experience.
+"""
         
         logger.info(f"📋 System prompt configured ({len(self.system_prompt)} chars)")
     
